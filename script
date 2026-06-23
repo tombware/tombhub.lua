@@ -1,0 +1,612 @@
+-- tomb's Aim Assist System v3.0
+-- Place as a LocalScript in StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Load Rayfield
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "tomb's Aim Assist",
+    LoadingTitle = "tomb UI",
+    LoadingSubtitle = "v3.0",
+    ConfigurationSaving = { Enabled = true, FileName = "tombAimAssist" },
+    KeySystem = true,
+    KeySettings = {
+        Title = "tomb's Aim Assist",
+        Subtitle = "Key System",
+        Note = "Enter your key to continue",
+        FileName = "tombKey",
+        SaveKey = true,
+        GrabKeyFromSite = false,
+        Key = {"tombhub"}
+    },
+})
+
+local AimTab = Window:CreateTab("Aim Assist", "crosshair")
+local VisualTab = Window:CreateTab("Visuals", "eye")
+local MobileTab = Window:CreateTab("Mobile", "smartphone")
+local InfoTab = Window:CreateTab("Info", "info")
+
+local Settings = {
+    Enabled = true,
+    Smoothness = 0.15,
+    FOV = 150,
+    HitPart = "Head",
+    MobileMode = UserInputService.TouchEnabled,
+    ShowFOV = true,
+    FOVShape = "Circle",
+    ShowArrow = true,
+    ShowHealthBar = true,
+    ShowNameTag = true,
+    PredictMovement = true,
+    PredictionAmount = 0.12,
+    Theme = "Dark",
+    AimDelay = 0,
+    MaxDistance = 500,
+    AutoSwitch = true,
+    TapToToggle = false,
+    AimActive = false,
+    ButtonSize = 90,
+}
+
+-- Drawing objects
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Radius = Settings.FOV
+fovCircle.Color = Color3.fromRGB(200, 200, 255)
+fovCircle.Thickness = 1.5
+fovCircle.Filled = false
+
+local fovSquare = Drawing.new("Square")
+fovSquare.Visible = false
+fovSquare.Size = Vector2.new(Settings.FOV * 2, Settings.FOV * 2)
+fovSquare.Color = Color3.fromRGB(200, 200, 255)
+fovSquare.Thickness = 1.5
+fovSquare.Filled = false
+
+-- Diamond (4 lines)
+local diamondLines = {}
+for i = 1, 4 do
+    local line = Drawing.new("Line")
+    line.Visible = false
+    line.Color = Color3.fromRGB(200, 200, 255)
+    line.Thickness = 1.5
+    diamondLines[i] = line
+end
+
+-- Arrow lines
+local arrowLine1 = Drawing.new("Line")
+local arrowLine2 = Drawing.new("Line")
+local arrowLine3 = Drawing.new("Line")
+for _, line in ipairs({arrowLine1, arrowLine2, arrowLine3}) do
+    line.Visible = false
+    line.Color = Color3.fromRGB(255, 255, 100)
+    line.Thickness = 2
+end
+
+-- Health bar + name tag billboards
+local healthBillboard, healthFrame, healthBar, healthLabel
+local nameBillboard, nameLabel
+
+local function cleanupBillboards()
+    if healthBillboard then healthBillboard:Destroy() healthBillboard = nil end
+    if nameBillboard then nameBillboard:Destroy() nameBillboard = nil end
+end
+
+local function createBillboards(character, playerName)
+    cleanupBillboards()
+    local head = character:FindFirstChild("Head")
+    if not head then return end
+
+    -- Health bar
+    healthBillboard = Instance.new("BillboardGui")
+    healthBillboard.Size = UDim2.new(0, 100, 0, 14)
+    healthBillboard.StudsOffset = Vector3.new(0, 2.5, 0)
+    healthBillboard.AlwaysOnTop = true
+    healthBillboard.Adornee = head
+    healthBillboard.Parent = head
+
+    healthFrame = Instance.new("Frame")
+    healthFrame.Size = UDim2.new(1, 0, 1, 0)
+    healthFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    healthFrame.BorderSizePixel = 0
+    healthFrame.Parent = healthBillboard
+
+    local hCorner = Instance.new("UICorner")
+    hCorner.CornerRadius = UDim.new(0, 4)
+    hCorner.Parent = healthFrame
+
+    healthBar = Instance.new("Frame")
+    healthBar.Size = UDim2.new(1, 0, 1, 0)
+    healthBar.BackgroundColor3 = Color3.fromRGB(80, 220, 80)
+    healthBar.BorderSizePixel = 0
+    healthBar.Parent = healthFrame
+
+    local bCorner = Instance.new("UICorner")
+    bCorner.CornerRadius = UDim.new(0, 4)
+    bCorner.Parent = healthBar
+
+    healthLabel = Instance.new("TextLabel")
+    healthLabel.Size = UDim2.new(1, 0, 1, 0)
+    healthLabel.BackgroundTransparency = 1
+    healthLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    healthLabel.TextScaled = true
+    healthLabel.Font = Enum.Font.GothamBold
+    healthLabel.Parent = healthFrame
+
+    -- Name tag
+    nameBillboard = Instance.new("BillboardGui")
+    nameBillboard.Size = UDim2.new(0, 120, 0, 20)
+    nameBillboard.StudsOffset = Vector3.new(0, 4.2, 0)
+    nameBillboard.AlwaysOnTop = true
+    nameBillboard.Adornee = head
+    nameBillboard.Parent = head
+
+    nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 1, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
+    nameLabel.Text = playerName
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextScaled = true
+    nameLabel.Parent = nameBillboard
+end
+
+local function getScreenCenter()
+    local vp = Camera.ViewportSize
+    return Vector2.new(vp.X / 2, vp.Y / 2)
+end
+
+local function getClosestPlayer()
+    local closestData = nil
+    local shortestDist = Settings.FOV
+    local origin = getScreenCenter()
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        local character = player.Character
+        if not character then continue end
+        local targetPart = character:FindFirstChild(Settings.HitPart)
+            or character:FindFirstChild("HumanoidRootPart")
+        if not targetPart then continue end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+
+        -- Max distance check
+        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if root then
+            local worldDist = (targetPart.Position - root.Position).Magnitude
+            if worldDist > Settings.MaxDistance then continue end
+        end
+
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if onScreen then
+            local dist = (Vector2.new(screenPos.X, screenPos.Y) - origin).Magnitude
+            if dist < shortestDist then
+                shortestDist = dist
+                closestData = {
+                    part = targetPart,
+                    player = player,
+                    humanoid = humanoid,
+                    name = player.Name
+                }
+            end
+        end
+    end
+
+    return closestData
+end
+
+local function drawArrow(screenPos)
+    local center = getScreenCenter()
+    local dir = (screenPos - center).Unit
+    local arrowTip = center + dir * 60
+    local arrowLeft = arrowTip - dir * 14 + Vector2.new(-dir.Y, dir.X) * 8
+    local arrowRight = arrowTip - dir * 14 + Vector2.new(dir.Y, -dir.X) * 8
+
+    arrowLine1.From = center + dir * 20
+    arrowLine1.To = arrowTip
+    arrowLine2.From = arrowTip
+    arrowLine2.To = arrowLeft
+    arrowLine3.From = arrowTip
+    arrowLine3.To = arrowRight
+
+    for _, line in ipairs({arrowLine1, arrowLine2, arrowLine3}) do
+        line.Visible = true
+    end
+end
+
+local function hideArrow()
+    for _, line in ipairs({arrowLine1, arrowLine2, arrowLine3}) do
+        line.Visible = false
+    end
+end
+
+local function drawFOV(center)
+    local shape = Settings.FOVShape
+    fovCircle.Visible = false
+    fovSquare.Visible = false
+    for _, l in ipairs(diamondLines) do l.Visible = false end
+
+    if not Settings.ShowFOV or not Settings.Enabled then return end
+
+    if shape == "Circle" then
+        fovCircle.Position = center
+        fovCircle.Visible = true
+
+    elseif shape == "Square" then
+        local s = Settings.FOV * 2
+        fovSquare.Position = Vector2.new(center.X - Settings.FOV, center.Y - Settings.FOV)
+        fovSquare.Size = Vector2.new(s, s)
+        fovSquare.Visible = true
+
+    elseif shape == "Diamond" then
+        local r = Settings.FOV
+        local top    = center + Vector2.new(0, -r)
+        local right  = center + Vector2.new(r, 0)
+        local bottom = center + Vector2.new(0, r)
+        local left   = center + Vector2.new(-r, 0)
+        diamondLines[1].From = top;    diamondLines[1].To = right
+        diamondLines[2].From = right;  diamondLines[2].To = bottom
+        diamondLines[3].From = bottom; diamondLines[3].To = left
+        diamondLines[4].From = left;   diamondLines[4].To = top
+        for _, l in ipairs(diamondLines) do l.Visible = true end
+    end
+end
+
+-- Mobile UI
+local mobileButton, screenGui
+if Settings.MobileMode then
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "tombMobileUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = LocalPlayer.PlayerGui
+
+    mobileButton = Instance.new("TextButton")
+    mobileButton.Size = UDim2.new(0, Settings.ButtonSize, 0, Settings.ButtonSize)
+    mobileButton.Position = UDim2.new(1, -200, 1, -200)
+    mobileButton.BackgroundColor3 = Color3.fromRGB(50, 50, 80)
+    mobileButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    mobileButton.Text = "🎯 AIM"
+    mobileButton.Font = Enum.Font.GothamBold
+    mobileButton.TextSize = 16
+    mobileButton.Parent = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = mobileButton
+end
+
+local aimHeld = false
+
+if mobileButton then
+    mobileButton.MouseButton1Click:Connect(function()
+        if Settings.TapToToggle then
+            Settings.AimActive = not Settings.AimActive
+            mobileButton.BackgroundColor3 = Settings.AimActive
+                and Color3.fromRGB(80, 80, 160)
+                or Color3.fromRGB(50, 50, 80)
+        end
+    end)
+    mobileButton.MouseButton1Down:Connect(function()
+        if not Settings.TapToToggle then aimHeld = true end
+    end)
+    mobileButton.MouseButton1Up:Connect(function()
+        if not Settings.TapToToggle then aimHeld = false end
+    end)
+end
+
+-- Aim delay timer
+local aimDelayTimer = 0
+local aimDelayActive = false
+local lastTargetName = nil
+local lastPosition = nil
+local lastTime = nil
+
+RunService.RenderStepped:Connect(function(dt)
+    local center = getScreenCenter()
+    drawFOV(center)
+
+    local targetData = getClosestPlayer()
+
+    -- Auto switch: reset delay if target changed
+    if Settings.AutoSwitch and targetData then
+        if targetData.name ~= lastTargetName then
+            aimDelayTimer = 0
+            aimDelayActive = false
+            lastTargetName = targetData.name
+        end
+    end
+
+    -- Arrow
+    if targetData and Settings.ShowArrow and Settings.Enabled then
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetData.part.Position)
+        if onScreen then
+            drawArrow(Vector2.new(screenPos.X, screenPos.Y))
+        else
+            hideArrow()
+        end
+    else
+        hideArrow()
+    end
+
+    -- Health bar + name tag
+    if targetData and (Settings.ShowHealthBar or Settings.ShowNameTag) then
+        local character = targetData.player.Character
+        if character then
+            if not healthBillboard or not healthBillboard.Parent then
+                createBillboards(character, targetData.name)
+            end
+            if healthBar and healthLabel and Settings.ShowHealthBar then
+                local hp = targetData.humanoid.Health
+                local maxHp = targetData.humanoid.MaxHealth
+                local pct = math.clamp(hp / maxHp, 0, 1)
+                healthBar.Size = UDim2.new(pct, 0, 1, 0)
+                healthLabel.Text = math.floor(hp) .. " HP"
+                healthBar.BackgroundColor3 = Color3.fromRGB(
+                    255 * (1 - pct), 220 * pct, 50
+                )
+            end
+            if nameBillboard then
+                nameBillboard.Enabled = Settings.ShowNameTag
+            end
+            if healthBillboard then
+                healthBillboard.Enabled = Settings.ShowHealthBar
+            end
+        end
+    else
+        cleanupBillboards()
+    end
+
+    if not Settings.Enabled then return end
+
+    local aiming = (Settings.TapToToggle and Settings.AimActive)
+        or (not Settings.TapToToggle and (aimHeld
+        or (not Settings.MobileMode and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2))))
+
+    if not aiming then
+        aimDelayTimer = 0
+        aimDelayActive = false
+        lastPosition = nil
+        lastTime = nil
+        return
+    end
+
+    -- Aim delay
+    if Settings.AimDelay > 0 and not aimDelayActive then
+        aimDelayTimer = aimDelayTimer + dt
+        if aimDelayTimer >= Settings.AimDelay then
+            aimDelayActive = true
+        else
+            return
+        end
+    else
+        aimDelayActive = true
+    end
+
+    if not targetData then return end
+
+    local targetPos = targetData.part.Position
+
+    -- Movement prediction
+    if Settings.PredictMovement then
+        local now = tick()
+        if lastPosition and lastTime then
+            local velocity = (targetPos - lastPosition) / (now - lastTime)
+            targetPos = targetPos + velocity * Settings.PredictionAmount
+        end
+        lastPosition = targetData.part.Position
+        lastTime = tick()
+    end
+
+    local _, onScreen = Camera:WorldToViewportPoint(targetPos)
+    if not onScreen then return end
+
+    local targetCFrame = CFrame.lookAt(Camera.CFrame.Position, targetPos)
+    Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, Settings.Smoothness)
+end)
+
+-- == Rayfield UI ==
+
+-- Aim Tab
+AimTab:CreateToggle({
+    Name = "Aim Assist Enabled",
+    CurrentValue = true,
+    Flag = "Enabled",
+    Callback = function(v)
+        Settings.Enabled = v
+        if mobileButton then mobileButton.Visible = v end
+    end,
+})
+
+AimTab:CreateSlider({
+    Name = "FOV Radius",
+    Range = {50, 400},
+    Increment = 10,
+    CurrentValue = 150,
+    Flag = "FOV",
+    Callback = function(v)
+        Settings.FOV = v
+        fovCircle.Radius = v
+    end,
+})
+
+AimTab:CreateSlider({
+    Name = "Strength (lower = stronger)",
+    Range = {1, 100},
+    Increment = 1,
+    CurrentValue = 15,
+    Flag = "Strength",
+    Callback = function(v)
+        Settings.Smoothness = v / 100
+    end,
+})
+
+AimTab:CreateSlider({
+    Name = "Aim Delay (seconds x10)",
+    Range = {0, 20},
+    Increment = 1,
+    CurrentValue = 0,
+    Flag = "AimDelay",
+    Callback = function(v)
+        Settings.AimDelay = v / 10
+    end,
+})
+
+AimTab:CreateSlider({
+    Name = "Max Distance (studs)",
+    Range = {50, 1000},
+    Increment = 50,
+    CurrentValue = 500,
+    Flag = "MaxDist",
+    Callback = function(v)
+        Settings.MaxDistance = v
+    end,
+})
+
+AimTab:CreateSlider({
+    Name = "Prediction Amount",
+    Range = {0, 50},
+    Increment = 1,
+    CurrentValue = 12,
+    Flag = "Prediction",
+    Callback = function(v)
+        Settings.PredictionAmount = v / 100
+    end,
+})
+
+AimTab:CreateToggle({
+    Name = "Predict Movement",
+    CurrentValue = true,
+    Flag = "PredictMovement",
+    Callback = function(v)
+        Settings.PredictMovement = v
+    end,
+})
+
+AimTab:CreateToggle({
+    Name = "Auto Switch Target",
+    CurrentValue = true,
+    Flag = "AutoSwitch",
+    Callback = function(v)
+        Settings.AutoSwitch = v
+    end,
+})
+
+AimTab:CreateDropdown({
+    Name = "Target Part",
+    Options = {"Head", "HumanoidRootPart", "Torso"},
+    CurrentOption = {"Head"},
+    Flag = "HitPart",
+    Callback = function(v)
+        Settings.HitPart = v[1]
+    end,
+})
+
+-- Visuals Tab
+VisualTab:CreateToggle({
+    Name = "Show FOV Shape",
+    CurrentValue = true,
+    Flag = "ShowFOV",
+    Callback = function(v)
+        Settings.ShowFOV = v
+    end,
+})
+
+VisualTab:CreateDropdown({
+    Name = "FOV Shape",
+    Options = {"Circle", "Square", "Diamond"},
+    CurrentOption = {"Circle"},
+    Flag = "FOVShape",
+    Callback = function(v)
+        Settings.FOVShape = v[1]
+    end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Show Target Arrow",
+    CurrentValue = true,
+    Flag = "ShowArrow",
+    Callback = function(v)
+        Settings.ShowArrow = v
+    end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Show Health Bar",
+    CurrentValue = true,
+    Flag = "ShowHealthBar",
+    Callback = function(v)
+        Settings.ShowHealthBar = v
+    end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Show Name Tag",
+    CurrentValue = true,
+    Flag = "ShowNameTag",
+    Callback = function(v)
+        Settings.ShowNameTag = v
+    end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Dark Theme",
+    CurrentValue = true,
+    Flag = "DarkTheme",
+    Callback = function(v)
+        Rayfield:SetTheme(v and "Dark" or "Light")
+    end,
+})
+
+-- Mobile Tab
+if Settings.MobileMode then
+    MobileTab:CreateToggle({
+        Name = "Tap to Toggle (instead of hold)",
+        CurrentValue = false,
+        Flag = "TapToggle",
+        Callback = function(v)
+            Settings.TapToToggle = v
+            Settings.AimActive = false
+            if mobileButton then
+                mobileButton.BackgroundColor3 = Color3.fromRGB(50, 50, 80)
+            end
+        end,
+    })
+
+    MobileTab:CreateSlider({
+        Name = "Button Size",
+        Range = {60, 150},
+        Increment = 5,
+        CurrentValue = 90,
+        Flag = "ButtonSize",
+        Callback = function(v)
+            Settings.ButtonSize = v
+            if mobileButton then
+                mobileButton.Size = UDim2.new(0, v, 0, v)
+            end
+        end,
+    })
+else
+    MobileTab:CreateLabel("Mobile features only available on mobile devices.")
+end
+
+-- Info Tab
+InfoTab:CreateSection("tomb's Aim Assist v3.0")
+InfoTab:CreateLabel("Key: tombhub")
+InfoTab:CreateLabel("PC: Hold right-click to activate.")
+InfoTab:CreateLabel("Mobile: Tap or hold the 🎯 button.")
+InfoTab:CreateLabel("FOV Shapes: Circle, Square, Diamond")
+InfoTab:CreateLabel("Features: Delay, Auto Switch, Max Distance, Name Tags")
+
+Rayfield:Notify({
+    Title = "tomb's Aim Assist v3.0",
+    Content = "Loaded! Key: tombhub",
+    Duration = 6,
+})
